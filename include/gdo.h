@@ -23,7 +23,11 @@ extern "C" {
 #endif
 
 #include <driver/uart.h>
+#include <driver/rmt.h>
 #include <driver/gpio.h>
+
+#define RF_RX_GPIO 14
+#define RF_TX_GPIO 16
 
 typedef enum {
     GDO_DOOR_STATE_UNKNOWN = 0,
@@ -96,6 +100,7 @@ typedef enum {
 typedef enum {
     GDO_PROTOCOL_SEC_PLUS_V1 = 1,
     GDO_PROTOCOL_SEC_PLUS_V2,
+    GDO_PROTOCOL_SEC_PLUS_V1_WITH_SMART_PANEL,
     GDO_PROTOCOL_MAX,
 } gdo_protocol_type_t;
 
@@ -155,6 +160,12 @@ typedef struct {
     bool invert_uart; // Invert UART signal
     gpio_num_t uart_tx_pin; // UART TX pin
     gpio_num_t uart_rx_pin; // UART RX pin
+    #ifdef RF_TX_GPIO
+    gpio_num_t rf_tx_pin; // RF Module TX pin
+    #endif
+    #ifdef RF_RX_GPIO
+    gpio_num_t rf_rx_pin; // RF Module RX pin
+    #endif
     gpio_num_t obst_in_pin; // Obstruction input pin
 } gdo_config_t;
 
@@ -402,6 +413,13 @@ esp_err_t gdo_set_open_duration(uint16_t ms);
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the ms is invalid.
 */
 esp_err_t gdo_set_close_duration(uint16_t ms);
+
+/**
+ * @brief Sets the minimum time in milliseconds to wait between sending consecutive commands.
+ * @param ms The minimum time in milliseconds.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the time is invalid.
+*/
+esp_err_t gdo_set_min_command_interval(uint32_t ms);
 
 #ifdef __cplusplus
 }
