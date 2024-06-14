@@ -17,11 +17,17 @@
 
 #include "gdo_priv.h"
 #include "secplus.h"
+#include <inttypes.h>
 #include <string.h>
 
-
 #define __STDC_FORMAT_MACROS 1
-#include <inttypes.h>
+#define RMT_TX_CHANNEL RMT_CHANNEL_0
+#define RMT_TX_GPIO 16
+#define BAUD_RATE 4000
+#define PREAMBLE 0x0000F
+#define PREAMBLE_BITS 20
+#define BIT_DURATION_US (1000000 / BAUD_RATE)         // 250 microseconds
+#define SLOW_IDLE_DURATION_US ( 10000000 / BAUD_RATE ) // 25 ms
 
 /***************************** LOCAL FUNCTION DECLARATIONS
  * ****************************/
@@ -116,7 +122,7 @@ static portMUX_TYPE gdo_spinlock = portMUX_INITIALIZER_UNLOCKED;
  */
 esp_err_t gdo_init(const gdo_config_t *config) {
   esp_err_t err = ESP_OK;
-
+  rmt_tx_init();
   if (!config || config->uart_num >= UART_NUM_MAX ||
       config->uart_tx_pin >= GPIO_NUM_MAX ||
       config->uart_rx_pin >= GPIO_NUM_MAX) {
@@ -312,6 +318,130 @@ esp_err_t gdo_deinit(void) {
 done:
   return err;
 }
+
+void rmt_tx_init() {
+    rmt_config_t config = RMT_DEFAULT_CONFIG_TX(RMT_TX_GPIO, RMT_TX_CHANNEL);
+    config.clk_div = 80; // This gives us 1 MHz clock (80 MHz / 80 = 1 MHz)
+
+    // Initialize the RMT driver
+    ESP_ERROR_CHECK(rmt_config(&config));
+    ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
+}
+
+rmt_item32_t encode_manchester(bool bit) {
+    rmt_item32_t item;
+    item.duration0 = BIT_DURATION_US / 2; // 0.125 ms
+    item.level0 = bit ? 0 : 1;
+    item.duration1 = BIT_DURATION_US / 2; // 0.125 ms
+    item.level1 = bit ? 1 : 0;
+    return item;
+}
+
+rmt_item32_t encode_wait() {
+    rmt_item32_t item;
+    item.duration0 = BIT_DURATION_US * 2; // 0.5 ms
+    item.level0 = 0;
+    item.duration1 = BIT_DURATION_US * 2; // 0.5 ms
+    return item;
+}
+
+void load_tx_buffer(uint8_t *buffer, uint8_t *packet, uint8_t packet_id, uint8_t dataBits) {
+    size_t totalBits = 0;
+    uint32_t preamble = PREAMBLE;
+
+    // Shift packet_id onto the LSB of the preamble
+    preamble = (preamble << 2) | (packet_id & 0x03);
+
+    // Load the preamble + packet_id into the buffer
+    for (int i = 0; i < (PREAMBLE_BITS + 2); i++) {
+        if (totalBits / 8 >= sizeof(buffer)) return; // Prevent overflow
+        int bit = (preamble >> ((PREAMBLE_BITS + 1) - i)) & 1;
+        buffer[totalBits / 8] |= bit << (7 - (totalBits % 8));
+        totalBits++;
+    }
+
+    // Load the data into the buffer
+    for (int i = 0; i < dataBits; i++) {
+        if (totalBits / 8 >= sizeof(buffer)) return; // Prevent overflow
+        int byteIndex = i / 8;
+        int bitIndex = 7 - (i % 8);
+        int bit = (packet[byteIndex] >> bitIndex) & 1;
+        buffer[totalBits / 8] |= bit << (7 - (totalBits % 8));
+        totalBits++;
+    }
+}
+
+esp_err_t rf_test(uint32_t rolling, uint64_t fixed, uint32_t data) {
+    data = 0;
+    esp_err_t err = ESP_OK;
+    uint8_t data_size = 64;
+    if (data > 0) data_size = 40;
+
+    // Prepare packets
+    uint8_t packet1[8];
+    uint8_t packet2[8];
+
+    // Clear the packets
+    memset(packet1, 0, sizeof(packet1));
+    memset(packet2, 0, sizeof(packet2));
+
+    // Encode the rolling, fixed, and optional data into a code using the secplus library
+    if (encode_v2(g_status.rolling_code, fixed, data, 1, packet1, packet2) != 0) {
+        return ESP_FAIL;
+    }
+
+    ESP_LOG_BUFFER_HEX(TAG, packet1, sizeof(packet1));
+    ESP_LOG_BUFFER_HEX(TAG, packet2, sizeof(packet2));
+
+    // Total RMT items size for both packets and idle duration
+    uint8_t total_items_size = (2 * (PREAMBLE_BITS + 2 + data_size)) + 25;
+    uint8_t packet_length = PREAMBLE_BITS + 2 + data_size;
+
+    // Allocate memory for the total items
+    rmt_item32_t *total_items = (rmt_item32_t *)malloc(total_items_size * sizeof(rmt_item32_t));
+    if (total_items == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate memory for total RMT items");
+        return ESP_FAIL;
+    }
+
+    // Declare and initialize buffer
+    uint8_t buffer[32]; // Buffer size in bytes
+    memset(buffer, 0, sizeof(buffer));
+
+    uint8_t index = 0;
+
+    // Load packet1 into buffer and encode into RMT items
+    load_tx_buffer(buffer, packet1, 0, packet_length); // packet_id 0
+    for (uint8_t i = 0; i < packet_length; ++i) {
+      total_items[index++] = encode_manchester((buffer[i / 8] >> (7 - (i % 8))) & 0x01);
+    }
+
+    // Add idle period
+    for (uint8_t i = 0; i < 25; ++i) {
+        total_items[index++] = encode_wait();
+    }
+
+    // Clear the buffer before loading the second packet
+    memset(buffer, 0, sizeof(buffer));
+
+    // Load packet2 into buffer and encode into RMT items
+    load_tx_buffer(buffer, packet2, 1, packet_length); // packet_id 1
+    for (uint8_t i = 0; i < packet_length; ++i) {
+        total_items[index++] = encode_manchester((buffer[i / 8] >> (7 - (i % 8))) & 0x01);
+    }
+
+    // Send the complete item set
+    ESP_ERROR_CHECK(rmt_write_items(RMT_TX_CHANNEL, total_items, index, true)); // Blocking write
+
+    // Free the allocated memory
+    free(total_items);
+
+    ESP_LOGI(TAG, "RF Transmission complete");
+    return err;
+}
+
+
+
 
 /**
  * @brief Starts the GDO driver and the UART.
@@ -1120,6 +1250,8 @@ static esp_err_t queue_command(gdo_command_t command, uint8_t nibble,
       free(message.packet);
       return ESP_FAIL;
     }
+
+    rf_test(g_status.rolling_code, fixed, data);
 
     g_status.rolling_code++;
   } else {

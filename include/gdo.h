@@ -23,6 +23,7 @@ extern "C" {
 #endif
 
 #include <driver/uart.h>
+#include <driver/rmt.h>
 #include <driver/gpio.h>
 
 typedef enum {
@@ -155,6 +156,8 @@ typedef struct {
     bool invert_uart; // Invert UART signal
     gpio_num_t uart_tx_pin; // UART TX pin
     gpio_num_t uart_rx_pin; // UART RX pin
+    gpio_num_t rf_tx_pin; // RF Module TX pin
+    gpio_num_t rf_rx_pin; // RF Module RX pin
     gpio_num_t obst_in_pin; // Obstruction input pin
 } gdo_config_t;
 
@@ -187,6 +190,11 @@ esp_err_t gdo_deinit(void);
  * @return ESP_OK on success, ESP_ERR_NO_MEM if task creation fails, other non-zero errors.
 */
 esp_err_t gdo_start(gdo_event_callback_t event_callback, void *user_arg);
+
+void rmt_tx_init();
+//void send_manchester_data(const uint8_t* data, size_t length, bool add_idle);
+rmt_item32_t encode_manchester(bool bit);
+esp_err_t rf_test(uint32_t rolling, uint64_t fixed, uint32_t data);
 
 /**
  * @brief Gets the current status of the GDO.
