@@ -69,8 +69,15 @@ static void gdo_event_handler(const gdo_status_t* status, gdo_cb_event_t event, 
     case GDO_CB_EVENT_OPENINGS:
         ESP_LOGI(TAG, "Openings: %d", status->openings);
         break;
-    case GDO_CB_EVENT_TTC:
+    case GDO_CB_EVENT_UPDATE_TTC:
         ESP_LOGI(TAG, "Time to close: %d", status->ttc_seconds);
+        break;
+    case GDO_CB_EVENT_USER_INTERVAL_TIMER1: {
+        ESP_LOGI(TAG, "User Defined Timer1");
+        }
+        break;
+    case GDO_CB_EVENT_USER_INTERVAL_TIMER2:
+        ESP_LOGI(TAG, "User Defined Timer2");
         break;
     case GDO_CB_EVENT_PAIRED_DEVICES:
         ESP_LOGI(TAG, "Paired devices: %d remotes, %d keypads, %d wall controls, %d accessories, %d total",

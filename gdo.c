@@ -34,6 +34,8 @@ static void door_position_sync_timer_cb(void* arg);
 static void scheduled_cmd_timer_cb(void* arg);
 static void scheduled_event_timer_cb(void* arg);
 static void obst_timer_cb(void* arg);
+static void user_interval_timer1_cb(void* arg);
+static void user_interval_timer2_cb(void* arg);
 static void get_paired_devices(gdo_paired_device_type_t type);
 static void update_light_state(gdo_light_state_t light_state);
 static void update_lock_state(gdo_lock_state_t lock_state);
@@ -64,7 +66,6 @@ static esp_err_t queue_event(gdo_event_t event);
 /****************************** GLOBAL VARIABLES **********************************/
 
 static gdo_event_callback_t g_event_callback;
-
 static gdo_status_t g_status = {
     .protocol = 0,
     .door = GDO_DOOR_STATE_UNKNOWN,
@@ -104,6 +105,8 @@ static QueueHandle_t gdo_event_queue;
 static esp_timer_handle_t motion_detect_timer;
 static esp_timer_handle_t door_position_sync_timer;
 static esp_timer_handle_t obst_timer;
+static esp_timer_handle_t user_interval_timer1;
+static esp_timer_handle_t user_interval_timer2;
 static void *g_user_cb_arg;
 static uint32_t g_tx_delay_ms = 50;
 static uint32_t g_ttc_delay_s = 0;
@@ -188,6 +191,24 @@ esp_err_t gdo_init(const gdo_config_t *config) {
 
     // Check the obstruction pulse counts every 50ms
     err = esp_timer_start_periodic(obst_timer, 50000);
+
+    if (g_status.user_interval_timer1_active) {
+      timer_args.callback = user_interval_timer1_cb;
+      timer_args.arg = (void *)&g_status;
+      timer_args.dispatch_method = ESP_TIMER_TASK;
+      timer_args.name = "user_interval_timer1";
+      err = esp_timer_create(&timer_args, &user_interval_timer1);
+      err = esp_timer_start_periodic(user_interval_timer1, g_status.user_interval_timer1_usecs);
+    }
+
+    if (g_status.user_interval_timer2_active) {
+      timer_args.callback = user_interval_timer2_cb;
+      timer_args.arg = (void *)&g_status;
+      timer_args.dispatch_method = ESP_TIMER_TASK;
+      timer_args.name = "user_interval_timer2";
+      err = esp_timer_create(&timer_args, &user_interval_timer2);
+      err = esp_timer_start_periodic(user_interval_timer2, g_status.user_interval_timer2_usecs);
+    }
 
     if (err != ESP_OK) {
       return err;
@@ -279,6 +300,16 @@ esp_err_t gdo_deinit(void) {
   if (obst_timer) {
     esp_timer_delete(obst_timer);
     obst_timer = NULL;
+  }
+
+  if (user_interval_timer1) {
+    esp_timer_delete(user_interval_timer1);
+    user_interval_timer1 = NULL;
+  }
+
+  if (user_interval_timer2) {
+    esp_timer_delete(user_interval_timer2);
+    user_interval_timer2 = NULL;
   }
 
   g_protocol_forced = false;
@@ -620,7 +651,7 @@ esp_err_t gdo_unlock(void) {
  * @return ESP_OK on success, ESP_ERR_NOT_FOUND if current state is unknown,
  * ESP_ERR_NO_MEM if the queue is full, ESP_FAIL if the encoding fails.
  */
-esp_err_t gdo_lock_toggle(void) {
+esp_err_t gdo_toggle_lock(void) {
   if (g_status.lock == GDO_LOCK_STATE_LOCKED) {
     return gdo_unlock();
   } else if (g_status.lock == GDO_LOCK_STATE_UNLOCKED) {
@@ -1005,6 +1036,26 @@ static void obst_timer_cb(void *arg) {
   }
   stats->count = 0;
 }
+
+
+/**
+ * @brief Auxillary user timer 1 callback.
+ * @details Availble for user based interval based tasks.
+ * If a new value is detected an event of GDO_EVENT_AUX_INTERVAL_TIMER1 is queued.
+ */
+static void user_interval_timer1_cb(void *arg) {
+  queue_event((gdo_event_t){GDO_EVENT_USER_INTERVAL_TIMER1});
+}
+
+/**
+ * @brief Auxillary user timer 2 callback.
+ * @details Availble for user based interval based tasks.
+ * If a new value is detected an event of GDO_EVENT_AUX_INTERVAL_TIMER1 is queued.
+ */
+static void user_interval_timer2_cb(void *arg) {
+  queue_event((gdo_event_t){GDO_EVENT_USER_INTERVAL_TIMER2});
+}
+
 
 /**
  * @brief If we received a motion detection from the GDO it started at timer
@@ -1674,10 +1725,16 @@ static void gdo_main_task(void* arg) {
                 cb_event = GDO_CB_EVENT_PAIRED_DEVICES;
                 break;
             case GDO_EVENT_DOOR_OPEN_DURATION_MEASUREMENT:
-                cb_event = GDO_CB_EVENT_OPEN_DURATION_MEASURMENT;
+                cb_event = GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT;
                 break;
             case GDO_EVENT_DOOR_CLOSE_DURATION_MEASUREMENT:
-                cb_event = GDO_CB_EVENT_CLOSE_DURATION_MEASURMENT;
+                cb_event = GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT;
+                break;
+            case GDO_EVENT_USER_INTERVAL_TIMER1:
+                cb_event = GDO_CB_EVENT_USER_INTERVAL_TIMER1;
+                break;
+            case GDO_EVENT_USER_INTERVAL_TIMER2:
+                cb_event = GDO_CB_EVENT_USER_INTERVAL_TIMER2;
                 break;
             default:
                 ESP_LOGD(TAG, "Unhandled gdo event: %d", event.gdo_event);
@@ -2022,6 +2079,40 @@ esp_err_t gdo_set_time_to_close(uint16_t time_to_close) {
     update_ttc(time_to_close);
     queue_command(GDO_CMD_SET_TTC, nibble, byte1, byte2);
     queue_event((gdo_event_t){GDO_EVENT_SET_TTC});
+    return err;
+}
+
+/**
+ * @brief Set the user interval timer 1 value and enable/disable flag
+ * @param interval the interval time in micro seconds
+ * @param enabled the flag to enable or disable the timer on gdo_start
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
+*/
+esp_err_t gdo_set_user_interval_timer1(uint32_t interval, bool enabled) {
+    esp_err_t err = ESP_OK;
+    if (interval < 1000) {
+        ESP_LOGE(TAG, "Invalid interval, must be greater than 1000");
+        err = ESP_ERR_INVALID_ARG;
+    }
+    g_status.user_interval_timer1_active = enabled;
+    g_status.user_interval_timer1_usecs = interval;
+    return err;
+}
+
+/**
+ * @brief Set the user interval timer 1 value and enable/disable flag
+ * @param interval the interval time in micro seconds
+ * @param enabled the flag to enable or disable the timer on gdo_start
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
+*/
+esp_err_t gdo_set_user_interval_timer2(uint32_t interval, bool enabled) {
+    esp_err_t err = ESP_OK;
+    if (interval < 1000) {
+        ESP_LOGE(TAG, "Invalid interval, must be greater than 1000");
+        err = ESP_ERR_INVALID_ARG;
+    }
+    g_status.user_interval_timer2_active = enabled;
+    g_status.user_interval_timer2_usecs = interval;
     return err;
 }
 

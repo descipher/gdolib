@@ -116,8 +116,10 @@ typedef enum {
     GDO_CB_EVENT_CANCEL_TTC,
     GDO_CB_EVENT_UPDATE_TTC,
     GDO_CB_EVENT_PAIRED_DEVICES,
-    GDO_CB_EVENT_OPEN_DURATION_MEASURMENT,
-    GDO_CB_EVENT_CLOSE_DURATION_MEASURMENT,
+    GDO_CB_EVENT_OPEN_DURATION_MEASUREMENT,
+    GDO_CB_EVENT_CLOSE_DURATION_MEASUREMENT,
+    GDO_CB_EVENT_USER_INTERVAL_TIMER1,
+    GDO_CB_EVENT_USER_INTERVAL_TIMER2,
     GDO_CB_EVENT_MAX,
 } gdo_cb_event_t;
 
@@ -141,8 +143,12 @@ typedef struct {
     gdo_battery_state_t battery; // Battery state
     gdo_learn_state_t learn; // Learn state
     gdo_paired_device_t paired_devices; // Paired devices
+    gdo_door_state_t last_move_direction; // Last move direction
     bool synced; // Synced state
     bool ttc_enabled; //ttc active
+    bool toggle_only; // Used when the door opener only supports the toggle command.
+    bool user_interval_timer1_active; // User interval timer 1 active
+    bool user_interval_timer2_active; // User interval timer 2 active
     uint16_t openings; // Number of openings
     uint16_t ttc_seconds; // Time to close in seconds
     uint16_t open_ms; // Time door takes to open from fully closed in milliseconds
@@ -151,8 +157,8 @@ typedef struct {
     int32_t door_target; // Door target position in percentage (0-10000) [OPEN-CLOSED]
     uint32_t client_id; // Client ID
     uint32_t rolling_code; // Rolling code
-    bool toggle_only; // Used when the door opener only supports the toggle command.
-    gdo_door_state_t last_move_direction; // Last move direction
+    uint32_t user_interval_timer1_usecs; // User interval timer 1 microseconds
+    uint32_t user_interval_timer2_usecs; // User interval timer 2 microseconds
 } gdo_status_t;
 
 typedef struct {
@@ -164,6 +170,8 @@ typedef struct {
     gpio_num_t obst_in_pin; // Obstruction input pin
     gpio_num_t rf_tx_pin; // RF TX pin
     gpio_num_t rf_rx_pin; // RF RX pin
+    // gpio_num_t i2c_sda_pin; // I2C SDA pin
+    // gpio_num_t i2c_scl_pin; // I2C SCL pin
 } gdo_config_t;
 
 #define GDO_PAIRED_DEVICE_COUNT_UNKNOWN 0xff
@@ -404,6 +412,22 @@ esp_err_t gdo_set_protocol(gdo_protocol_type_t protocol);
  * ESP_ERR_INVALID_STATE if the time is out of range.
 */
 esp_err_t gdo_set_time_to_close(uint16_t time_to_close);
+
+/**
+ * @brief Set the user interval timer 1 value and enable/disable flag
+ * @param interval the interval time in micro seconds
+ * @param enabled the flag to enable or disable the timer on gdo_start
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
+*/
+esp_err_t gdo_set_user_interval_timer1(uint32_t interval, bool enabled);
+
+/**
+ * @brief Set the user interval timer 2 value and enable/disable flag
+ * @param interval the interval time in micro seconds
+ * @param enabled the flag to enable or disable the timer on gdo_start
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the interval is less than 1000
+*/
+esp_err_t gdo_set_user_interval_timer2(uint32_t interval, bool enabled);
 
 /**
  * @brief Sets the time the door takes to open from fully closed in milliseconds.
