@@ -15,7 +15,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "gdo.h"
+#include "../include/gdo.h"
 #include "gdo_priv.h"
 
 const char *gdo_door_state_str[] = {

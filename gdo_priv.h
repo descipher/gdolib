@@ -23,7 +23,7 @@ extern "C" {
 #endif // __cplusplus
 
 #include <esp_timer.h>
-#include "gdo.h"
+#include "../include/gdo.h"
 #include "esp_log.h"
 
 #define RX_BUFFER_SIZE 160
@@ -95,6 +95,8 @@ typedef enum {
     GDO_EVENT_PAIRED_DEVICES_UPDATE,
     GDO_EVENT_DOOR_OPEN_DURATION_MEASUREMENT,
     GDO_EVENT_DOOR_CLOSE_DURATION_MEASUREMENT,
+    GDO_EVENT_USER_INTERVAL_TIMER1,
+    GDO_EVENT_USER_INTERVAL_TIMER2,
     GDO_EVENT_MAX,
 } gdo_event_type_t;
 
